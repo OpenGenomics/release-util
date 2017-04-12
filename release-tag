@@ -1,0 +1,99 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+
+import argparse
+import fileinput
+import glob
+import git
+import os
+import re
+import sys
+
+
+def main(method, tag):
+    repo = git.Repo(os.getcwd())
+
+    validate_tag(tag)
+    validate_repo(repo)
+    update_cwl(tag)
+
+    if method == "create":
+        branch = "release-{}".format(tag)
+        repo.git.checkout('HEAD', b=branch)
+        repo.git.add(u=True)
+        repo.git.commit("-m", "tag release")
+        tag_ref = repo.create_tag(tag)
+        repo.git.checkout('master')
+        repo.branch("-D", branch)
+        push_summary = repo.remotes.origin.push(tag_ref)
+    elif method == "delete":
+        repo.delete_tag(tag)
+        push_summary = repo.remotes.origin.push(":refs/tags/{}".format(tag))
+    else:
+        raise RuntimeError("Unsupported tag method: {}".format(method))
+
+    print(push_summary[0].summary)
+    return
+
+
+def validate_tag(tag):
+    if not re.search("^v[0-9]\.[0-9]\.[0-9]", tag):
+        print(
+            "[ERROR] tag must be of the form v0.0.1",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return
+
+
+def validate_repo(repo):
+
+    if str(repo.active_branch) != "master":
+        print(
+            "[ERROR] release tags should reference the master branch.",
+            file=sys.stderr
+        )
+        sys.exit(1)
+
+    if not repo.bare:
+        print(
+            "[ERROR] there are uncommited changes in your branch.",
+            file=sys.stderr
+        )
+        sys.exit(1)
+
+    return
+
+
+def update_cwl(tag):
+    cwl_files = glob.glob("*.cwl*")
+    print(cwl_files)
+    for f in cwl_files:
+        print("PROCESSING: {}".format(f))
+        fh = open(f, "r")
+        contents = fh.read()
+        fh.close()
+        fh = open(f, "w")
+        result = re.sub(
+            r"(docker.*\:.*)\:([0-9a-zA-Z\._-]+)(.*)",
+            r"\1:{}\3".format(tag),
+            contents
+        )
+        fh.write(result)
+        fh.close()
+
+
+def parseArgs():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("method",
+                        choices=["create", "delete"])
+    parser.add_argument("tag",
+                        help="Name of the release tag to be created or \
+                        deleted")
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parseArgs()
+    main(args.method, args.tag)
